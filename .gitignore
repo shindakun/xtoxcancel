@@ -1,0 +1,11 @@
+.DS_Store
+
+node_modules/
+package-lock.json
+
+# wrangler's local state and dev cache
+.wrangler/
+
+.dev.vars
+.dev.vars.*
+.env

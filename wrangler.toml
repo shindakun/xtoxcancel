@@ -1,0 +1,17 @@
+name = "slack-xcancel-bot"
+main = "worker.js"
+compatibility_date = "2026-08-01"
+
+# Daily 9:00 UTC sweep to auto-join new public channels
+[triggers]
+crons = ["0 9 * * *"]
+
+# Secrets (do NOT put values here — set them with wrangler):
+#   echo -n "value" | npx wrangler secret put SLACK_SIGNING_SECRET
+#   echo -n "value" | npx wrangler secret put SLACK_BOT_TOKEN
+#
+# Slack bot token scopes required:
+#   chat:write       - post replies
+#   channels:history - receive message.channels events
+#   channels:read    - list public channels (cron sweep)
+#   channels:join    - self-join public channels (cron sweep)
