@@ -4,7 +4,7 @@ A Slack bot that watches for x.com and twitter.com links and replies in-thread
 with the same link pointed at xcancel.com, so you can read the post without an
 account.
 
-It runs as a single Cloudflare Worker. No database, no dependencies, one file.
+It runs as a single Cloudflare Worker.
 
 ## How it works
 
