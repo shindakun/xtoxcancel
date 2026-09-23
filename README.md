@@ -1,8 +1,8 @@
 # xtoxcancel
 
-A Slack bot that watches for x.com and twitter.com links and replies in-thread
-with the same link pointed at xcancel.com, so you can read the post without an
-account.
+A Slack bot that watches for x.com and twitter.com post links and replies
+in-thread with the post itself: author, text, links, images and videos, so you
+can read it without an account.
 
 It runs as a single Cloudflare Worker.
 
@@ -12,10 +12,23 @@ It runs as a single Cloudflare Worker.
 
 - **fetch**: handles Slack event webhooks. It verifies the Slack signature,
   answers the URL verification handshake, and for regular user messages pulls
-  out any x.com/twitter.com paths and posts them back as xcancel.com links.
-  The reply goes out via `ctx.waitUntil` so Slack gets its 200 right away.
+  out the status ID from any x.com/twitter.com post link. The replies go out
+  via `ctx.waitUntil` so Slack gets its 200 right away.
 - **scheduled**: runs daily at 09:00 UTC and joins any public channel the bot
   isn't in yet. That way you don't have to invite it to new channels by hand.
+
+`tweet.js` fetches each post and builds the reply:
+
+- It asks the public [FxTwitter API](https://github.com/FixTweet/FxTwitter)
+  (`api.fxtwitter.com`) first and falls back to
+  [vxTwitter](https://github.com/dylanpdx/BetterTwitFix) (`api.vxtwitter.com`)
+  if that fails or times out. Neither needs an account or API key.
+- The reply is a Block Kit message: author, text with `t.co` links expanded,
+  images inline, a play link and thumbnail for each video, the quoted post if
+  there is one, a list of outbound links, and a link back to X.
+- Each post gets its own reply. If neither API can load a post, the bot says
+  so and suggests a fixupx.com link. If Slack rejects the blocks (for example
+  it can't download an image), the bot retries with plain text.
 
 Bot messages and message subtypes (edits, joins, deletes) are ignored, so it
 won't reply to itself or spam on channel noise.
@@ -78,5 +91,8 @@ SLACK_BOT_TOKEN=...
 
 - Replies are threaded. If you'd rather have them in-channel, drop the
   `thread_ts` field in `postMessage`.
-- `unfurl_links` is off so you don't get two link previews stacked up.
+- `unfurl_links` and `unfurl_media` are off since the reply already shows the
+  post.
+- FxTwitter and vxTwitter are free community services with no SLA. If both go
+  away, `fetchTweet` in `tweet.js` is the only place to change.
 - Requests with a timestamp more than 5 minutes old are rejected as replays.

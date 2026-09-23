@@ -1,11 +1,19 @@
-// Slack x.com → xcancel.com link bot, as a Cloudflare Worker.
+// Slack bot that replies to x.com / twitter.com post links with the post's
+// text, links, images and videos, as a Cloudflare Worker.
 // Secrets required (set via `wrangler secret put`):
 //   SLACK_SIGNING_SECRET
 //   SLACK_BOT_TOKEN
 
-// Matches x.com / twitter.com links. Slack wraps URLs in <...> and may append
-// |label, so exclude '>', '|', and whitespace from the path.
-const X_LINK = /https?:\/\/(?:www\.)?(?:x|twitter)\.com(\/[^>|\s]+)/g;
+import {
+  buildFallback,
+  buildMessage,
+  extractStatusIds,
+  fetchTweet,
+} from "./tweet.js";
+
+// Each post costs up to four subrequests (two APIs, the post, a plain text
+// retry), and the Workers free plan allows 50 per invocation.
+const MAX_POSTS_PER_MESSAGE = 5;
 
 export default {
   async fetch(request, env, ctx) {
@@ -54,15 +62,10 @@ export default {
         !event.subtype &&
         typeof event.text === "string"
       ) {
-        const paths = [...event.text.matchAll(X_LINK)].map((m) => m[1]);
-        if (paths.length > 0) {
-          const text = paths
-            .map((p) => `https://xcancel.com${p}`)
-            .join("\n");
-          // Ack Slack immediately; post the reply after the response returns.
-          ctx.waitUntil(
-            postMessage(env.SLACK_BOT_TOKEN, event.channel, text, event.ts)
-          );
+        const ids = extractStatusIds(event.text);
+        if (ids.length > 0) {
+          // Ack Slack immediately; post the replies after the response returns.
+          ctx.waitUntil(replyWithTweets(env, event, ids));
         }
       }
     }
@@ -147,7 +150,36 @@ function timingSafeEqual(a, b) {
   return diff === 0;
 }
 
-async function postMessage(token, channel, text, threadTs) {
+// Fetches every post in parallel, then replies one message per post in the
+// order the links appeared.
+async function replyWithTweets(env, event, ids) {
+  const shown = ids.slice(0, MAX_POSTS_PER_MESSAGE);
+  const tweets = await Promise.all(shown.map((id) => fetchTweet(id)));
+  for (const [i, tweet] of tweets.entries()) {
+    const message = tweet ? buildMessage(tweet) : buildFallback(shown[i]);
+    try {
+      const ok = await postMessage(env.SLACK_BOT_TOKEN, event.channel, message, event.ts);
+      // Slack rejects the whole message if it can't download an image, so
+      // retry as plain text rather than dropping the reply.
+      if (!ok && message.blocks) {
+        await postMessage(env.SLACK_BOT_TOKEN, event.channel, { text: message.text }, event.ts);
+      }
+    } catch (err) {
+      console.error(`reply for ${shown[i]} failed:`, err.message);
+    }
+  }
+  const skipped = ids.length - shown.length;
+  if (skipped > 0) {
+    await postMessage(
+      env.SLACK_BOT_TOKEN,
+      event.channel,
+      { text: `Showing the first ${shown.length} posts; skipped ${skipped} more.` },
+      event.ts
+    ).catch((err) => console.error("skip notice failed:", err.message));
+  }
+}
+
+async function postMessage(token, channel, message, threadTs) {
   const res = await fetch("https://slack.com/api/chat.postMessage", {
     method: "POST",
     headers: {
@@ -156,13 +188,15 @@ async function postMessage(token, channel, text, threadTs) {
     },
     body: JSON.stringify({
       channel,
-      text,
+      ...message,
       thread_ts: threadTs, // reply in-thread; remove to post in-channel
-      unfurl_links: false, // avoid double link previews
+      unfurl_links: false, // the blocks already show the post
+      unfurl_media: false,
     }),
   });
   const data = await res.json();
   if (!data.ok) {
     console.error("chat.postMessage failed:", data.error);
   }
+  return data.ok;
 }
