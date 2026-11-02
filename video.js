@@ -29,8 +29,9 @@ export async function rehostVideo(
   return `${origin}/video/${key}`;
 }
 
-// Each copy is one more subrequest against the Workers per-invocation limit.
-const MAX_VIDEOS_PER_MESSAGE = 20;
+// A copy costs three subrequests (R2 head, the download, R2 put). Five posts
+// take up to 21 of the free plan's 50, so eight copies keeps us under it.
+const MAX_VIDEOS_PER_MESSAGE = 8;
 
 export async function rehostVideos(tweets, bucket, origin, { limit = MAX_VIDEOS_PER_MESSAGE } = {}) {
   if (!bucket) return;
@@ -54,7 +55,7 @@ export async function rehostVideos(tweets, bucket, origin, { limit = MAX_VIDEOS_
 
 export async function serveVideo(request, bucket) {
   const key = new URL(request.url).pathname.match(/^\/video\/(\d+\.mp4)$/)?.[1];
-  const object = key && (await bucket.get(key, { range: request.headers }));
+  const object = key && bucket && (await bucket.get(key, { range: request.headers }));
   if (!object) return new Response("not found", { status: 404 });
   // A media id's bytes never change, so the copy can be cached forever.
   const headers = new Headers({
