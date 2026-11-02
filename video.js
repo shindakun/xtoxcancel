@@ -55,7 +55,16 @@ export async function rehostVideos(tweets, bucket, origin, { limit = MAX_VIDEOS_
 
 export async function serveVideo(request, bucket) {
   const key = new URL(request.url).pathname.match(/^\/video\/(\d+\.mp4)$/)?.[1];
-  const object = key && bucket && (await bucket.get(key, { range: request.headers }));
+  if (!key || !bucket) return new Response("not found", { status: 404 });
+  let ranged = request.headers.has("range");
+  let object;
+  try {
+    object = await bucket.get(key, ranged ? { range: request.headers } : {});
+  } catch {
+    // R2 throws on a range it can't satisfy; ignoring Range is allowed.
+    ranged = false;
+    object = await bucket.get(key);
+  }
   if (!object) return new Response("not found", { status: 404 });
   // A media id's bytes never change, so the copy can be cached forever.
   const headers = new Headers({
@@ -64,7 +73,7 @@ export async function serveVideo(request, bucket) {
     etag: object.httpEtag,
   });
   object.writeHttpMetadata(headers);
-  if (!request.headers.has("range")) return new Response(object.body, { headers });
+  if (!ranged) return new Response(object.body, { headers });
   const { offset, length, suffix } = object.range;
   const first = suffix ? object.size - suffix : offset;
   const last = length ? first + length - 1 : object.size - 1;

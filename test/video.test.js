@@ -302,3 +302,12 @@ for (const [range, contentRange, body] of [
     assert.equal(await res.text(), body);
   });
 }
+
+test("sends the whole video when R2 cannot satisfy the requested range", async () => {
+  const request = new Request(`${ORIGIN}/video/99.mp4`, { headers: { range: "bytes=50-" } });
+
+  const res = await serveVideo(request, storedVideo("mp4 bytes"));
+
+  assert.equal(res.status, 200);
+  assert.equal(await res.text(), "mp4 bytes");
+});
