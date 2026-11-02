@@ -23,7 +23,10 @@ export async function rehostVideo(
       signal: AbortSignal.timeout(timeoutMs),
     });
     const length = Number(res.headers.get("content-length"));
-    if (!res.ok || !length || length > maxBytes) return null;
+    if (!res.ok || !length || length > maxBytes) {
+      await res.body?.cancel();
+      return null;
+    }
     await bucket.put(key, res.body, { httpMetadata: { contentType: "video/mp4" } });
   }
   return `${origin}/video/${key}`;

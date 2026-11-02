@@ -343,3 +343,15 @@ test("rehostVideos copies a video shared by two posts once", async () => {
   assert.equal(fetchMock.mock.callCount(), 1);
   assert.equal(post.quote.videos[0].url, `${ORIGIN}/video/1.mp4`);
 });
+
+test("rehosting closes the download it refuses", async () => {
+  let cancelled = false;
+  const body = new ReadableStream({ cancel: () => (cancelled = true) });
+  mock.method(globalThis, "fetch", async () =>
+    new Response(body, { headers: { "content-length": "100" } })
+  );
+
+  await rehostVideo(fakeBucket(), VIDEO, ORIGIN, { maxBytes: 50 });
+
+  assert.equal(cancelled, true);
+});
