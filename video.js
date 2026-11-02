@@ -11,6 +11,9 @@ const MAX_VIDEO_BYTES = 50 * 1024 * 1024;
 // Replies wait on the copy, and waitUntil stops 30 s after Slack's ack.
 const VIDEO_TIMEOUT_MS = 15000;
 
+// Cleanup goes by upload time, so a copy that's linked again gets re-saved
+// rather than expiring under a link posted today.
+const REFRESH_AFTER_MS = 30 * 24 * 3600 * 1000;
 const VIDEO_METADATA = { httpMetadata: { contentType: "video/mp4" } };
 
 export async function rehostVideo(
@@ -20,7 +23,10 @@ export async function rehostVideo(
   { maxBytes = MAX_VIDEO_BYTES, timeoutMs = VIDEO_TIMEOUT_MS } = {}
 ) {
   const key = `${video.id}.mp4`;
-  if (!(await bucket.head(key))) {
+  const stored = await bucket.head(key);
+  if (stored) {
+    if (Date.now() - stored.uploaded > REFRESH_AFTER_MS) await resave(bucket, key);
+  } else {
     const res = await fetch(pickVariant(video, maxBytes), {
       signal: AbortSignal.timeout(timeoutMs),
     });
@@ -32,6 +38,11 @@ export async function rehostVideo(
     await bucket.put(key, res.body, VIDEO_METADATA);
   }
   return `${origin}/video/${key}`;
+}
+
+async function resave(bucket, key) {
+  const object = await bucket.get(key);
+  await bucket.put(key, object.body, VIDEO_METADATA);
 }
 
 // A copy costs three subrequests (R2 head, the download, R2 put). Five posts

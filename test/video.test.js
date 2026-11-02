@@ -16,6 +16,7 @@ function fakeBucket() {
       if (!stored) return null;
       return {
         size: stored.bytes.length,
+        uploaded: stored.uploaded ?? new Date(),
         httpEtag: '"etag"',
         writeHttpMetadata(headers) {
           headers.set("content-type", stored.httpMetadata.contentType);
@@ -23,7 +24,8 @@ function fakeBucket() {
       };
     },
     async put(key, body, options) {
-      objects.set(key, { bytes: await new Response(body).text(), ...options });
+      const bytes = await new Response(body).text();
+      objects.set(key, { bytes, uploaded: new Date(), ...options });
     },
     // Mirrors R2: `range` is set even with no Range header, comes back as
     // {offset}, {offset, length} or {suffix}, and a bad header throws.
@@ -124,6 +126,19 @@ test("rehosting skips the download when the video is already stored", async () =
 
   assert.equal(url, `${ORIGIN}/video/99.mp4`);
   assert.equal(fetchMock.mock.callCount(), 0);
+});
+
+test("rehosting re-saves a stored copy over 30 days old so it isn't expired early", async () => {
+  const bucket = fakeBucket();
+  const old = new Date(Date.now() - 60 * 24 * 3600 * 1000);
+  bucket.objects.set("99.mp4", { bytes: "mp4 bytes", uploaded: old, httpMetadata: { contentType: "video/mp4" } });
+  const fetchMock = twimgServes("new bytes");
+
+  await rehostVideo(bucket, VIDEO, ORIGIN);
+
+  assert.equal(fetchMock.mock.callCount(), 0);
+  assert.equal(bucket.objects.get("99.mp4").bytes, "mp4 bytes");
+  assert.ok(bucket.objects.get("99.mp4").uploaded > old);
 });
 
 test("rehosting refuses a source larger than the cap", async () => {
