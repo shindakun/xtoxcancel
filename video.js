@@ -64,7 +64,7 @@ export async function serveVideo(request, bucket) {
     etag: object.httpEtag,
   });
   object.writeHttpMetadata(headers);
-  if (!object.range) return new Response(object.body, { headers });
+  if (!request.headers.has("range")) return new Response(object.body, { headers });
   const { offset, length } = object.range;
   headers.set("content-range", `bytes ${offset}-${offset + length - 1}/${object.size}`);
   return new Response(object.body, { status: 206, headers });

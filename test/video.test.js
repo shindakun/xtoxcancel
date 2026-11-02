@@ -17,12 +17,14 @@ function fakeBucket() {
     async put(key, body, options) {
       objects.set(key, { bytes: await new Response(body).text(), ...options });
     },
-    // Mirrors R2: a Range header in `range` returns that slice and sets `range`.
+    // Mirrors R2, which sets `range` even when no Range header was sent.
     async get(key, options) {
       const stored = objects.get(key);
       if (!stored) return null;
       const [, start, end] = options?.range?.get?.("range")?.match(/^bytes=(\d+)-(\d+)$/) ?? [];
-      const range = start && { offset: Number(start), length: end - start + 1 };
+      const range = start
+        ? { offset: Number(start), length: end - start + 1 }
+        : { offset: 0, length: stored.bytes.length };
       return {
         body: range ? stored.bytes.slice(range.offset, range.offset + range.length) : stored.bytes,
         size: stored.bytes.length,
