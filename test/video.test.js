@@ -1,6 +1,6 @@
 import { test, afterEach, mock } from "node:test";
 import assert from "node:assert/strict";
-import { pickVariant, rehostVideo } from "../video.js";
+import { pickVariant, rehostVideo, rehostVideos } from "../video.js";
 
 const MB = 1024 * 1024;
 const ORIGIN = "https://bot.example.workers.dev";
@@ -128,4 +128,89 @@ test("rehosting gives up on a source that takes too long", async () => {
   await assert.rejects(rehostVideo(bucket, VIDEO, ORIGIN, { timeoutMs: 10 }), {
     name: "TimeoutError",
   });
+});
+
+function postWithVideos(...ids) {
+  return {
+    videos: ids.map((id) => ({ ...VIDEO, id, url: `https://video.twimg.com/${id}.mp4` })),
+    quote: null,
+  };
+}
+
+test("rehostVideos points every video, quoted ones included, at the worker", async () => {
+  const bucket = fakeBucket();
+  twimgServes("mp4 bytes");
+  const post = postWithVideos("1");
+  post.quote = postWithVideos("2");
+
+  await rehostVideos([post], bucket, ORIGIN);
+
+  assert.equal(post.videos[0].url, `${ORIGIN}/video/1.mp4`);
+  assert.equal(post.quote.videos[0].url, `${ORIGIN}/video/2.mp4`);
+});
+
+test("rehostVideos keeps the X link for a video it could not copy", async () => {
+  const bucket = fakeBucket();
+  mock.method(globalThis, "fetch", async (url) => {
+    if (url.endsWith("/1.mp4")) throw new Error("connection reset");
+    return new Response("nope", { status: 404, headers: { "content-length": "4" } });
+  });
+  mock.method(console, "error", () => {});
+  const post = postWithVideos("1", "2");
+
+  await rehostVideos([post], bucket, ORIGIN);
+
+  assert.deepEqual(
+    post.videos.map((v) => v.url),
+    ["https://video.twimg.com/1.mp4", "https://video.twimg.com/2.mp4"]
+  );
+});
+
+test("rehostVideos skips posts that failed to load", async () => {
+  const bucket = fakeBucket();
+  twimgServes("mp4 bytes");
+  const post = postWithVideos("1");
+
+  await rehostVideos([null, post], bucket, ORIGIN);
+
+  assert.equal(post.videos[0].url, `${ORIGIN}/video/1.mp4`);
+});
+
+test("rehostVideos copies at most `limit` videos and links the rest to X", async () => {
+  const bucket = fakeBucket();
+  twimgServes("mp4 bytes");
+  const post = postWithVideos("1", "2", "3");
+
+  await rehostVideos([post], bucket, ORIGIN, { limit: 2 });
+
+  assert.deepEqual(
+    post.videos.map((v) => v.url),
+    [`${ORIGIN}/video/1.mp4`, `${ORIGIN}/video/2.mp4`, "https://video.twimg.com/3.mp4"]
+  );
+});
+
+test("rehostVideos leaves a video without a numeric media id on X", async () => {
+  const bucket = fakeBucket();
+  twimgServes("mp4 bytes");
+  const post = postWithVideos(undefined, "../etc");
+
+  await rehostVideos([post], bucket, ORIGIN);
+
+  assert.equal(bucket.objects.size, 0);
+  assert.deepEqual(
+    post.videos.map((v) => v.url),
+    ["https://video.twimg.com/undefined.mp4", "https://video.twimg.com/../etc.mp4"]
+  );
+});
+
+test("rehostVideos leaves videos on X when no bucket is bound", async () => {
+  const fetchMock = twimgServes("mp4 bytes");
+  const errors = mock.method(console, "error", () => {});
+  const post = postWithVideos("1");
+
+  await rehostVideos([post], undefined, ORIGIN);
+
+  assert.equal(post.videos[0].url, "https://video.twimg.com/1.mp4");
+  assert.equal(fetchMock.mock.callCount(), 0);
+  assert.equal(errors.mock.callCount(), 0);
 });

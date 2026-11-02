@@ -28,3 +28,26 @@ export async function rehostVideo(
   }
   return `${origin}/video/${key}`;
 }
+
+// Each copy is one more subrequest against the Workers per-invocation limit.
+const MAX_VIDEOS_PER_MESSAGE = 20;
+
+export async function rehostVideos(tweets, bucket, origin, { limit = MAX_VIDEOS_PER_MESSAGE } = {}) {
+  if (!bucket) return;
+  const videos = tweets
+    .filter(Boolean)
+    .flatMap((t) => [...t.videos, ...(t.quote?.videos || [])])
+    .filter((v) => /^\d+$/.test(v.id))
+    .slice(0, limit);
+  await Promise.all(
+    videos.map(async (v) => {
+      try {
+        const hosted = await rehostVideo(bucket, v, origin);
+        if (hosted) v.url = hosted;
+        else console.error(`could not copy video ${v.id}`);
+      } catch (err) {
+        console.error(`copying video ${v.id} failed:`, err.message);
+      }
+    })
+  );
+}
