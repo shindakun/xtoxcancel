@@ -2,11 +2,18 @@ name = "slack-xcancel-bot"
 main = "worker.js"
 compatibility_date = "2026-08-01"
 
+# Copies of post videos, served back at /video/<media id>.mp4 so people
+# without an X account can play them. Create it once with:
+#   npx wrangler r2 bucket create xtoxcancel-videos
+[[r2_buckets]]
+binding = "VIDEOS"
+bucket_name = "xtoxcancel-videos"
+
 # Daily 9:00 UTC sweep to auto-join new public channels
 [triggers]
 crons = ["0 9 * * *"]
 
-# Secrets (do NOT put values here — set them with wrangler):
+# Secrets (do NOT put values here; set them with wrangler):
 #   echo -n "value" | npx wrangler secret put SLACK_SIGNING_SECRET
 #   echo -n "value" | npx wrangler secret put SLACK_BOT_TOKEN
 #

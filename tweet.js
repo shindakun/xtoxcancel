@@ -67,8 +67,13 @@ function fromFx(data) {
       alt: p.altText || null,
     })),
     videos: (media.videos || []).map((v) => ({
+      id: v.id,
       url: v.url,
       thumbnail: v.thumbnail_url || null,
+      duration: v.duration,
+      variants: (v.variants || [])
+        .filter((x) => x.content_type === "video/mp4")
+        .map((x) => ({ url: x.url, bitrate: x.bitrate })),
     })),
     quote: t.quote ? fromFx(t.quote) : null,
   };
@@ -92,7 +97,13 @@ function fromVx(t) {
       .map((m) => ({ url: m.url, alt: m.altText || null })),
     videos: media
       .filter((m) => m.type === "video" || m.type === "gif")
-      .map((m) => ({ url: m.url, thumbnail: m.thumbnail_url || null })),
+      .map((m) => ({
+        id: m.id_str,
+        url: m.url,
+        thumbnail: m.thumbnail_url || null,
+        duration: m.duration_millis / 1000,
+        variants: [],
+      })),
     quote: t.qrt ? fromVx(t.qrt) : null,
   };
 }

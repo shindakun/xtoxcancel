@@ -10,13 +10,19 @@ import {
   extractStatusIds,
   fetchTweet,
 } from "./tweet.js";
+import { rehostVideos, serveVideo } from "./video.js";
 
 // Each post costs up to four subrequests (two APIs, the post, a plain text
-// retry), and the Workers free plan allows 50 per invocation.
+// retry), and the Workers free plan allows 50 per invocation. Video copies
+// take up to 24 more (see video.js).
 const MAX_POSTS_PER_MESSAGE = 5;
 
 export default {
   async fetch(request, env, ctx) {
+    const { origin, pathname } = new URL(request.url);
+    if ((request.method === "GET" || request.method === "HEAD") && pathname.startsWith("/video/")) {
+      return serveVideo(request, env.VIDEOS);
+    }
     if (request.method !== "POST") {
       return new Response("ok", { status: 200 });
     }
@@ -65,7 +71,7 @@ export default {
         const ids = extractStatusIds(event.text);
         if (ids.length > 0) {
           // Ack Slack immediately; post the replies after the response returns.
-          ctx.waitUntil(replyWithTweets(env, event, ids));
+          ctx.waitUntil(replyWithTweets(env, event, ids, origin));
         }
       }
     }
@@ -152,9 +158,10 @@ function timingSafeEqual(a, b) {
 
 // Fetches every post in parallel, then replies one message per post in the
 // order the links appeared.
-async function replyWithTweets(env, event, ids) {
+async function replyWithTweets(env, event, ids, origin) {
   const shown = ids.slice(0, MAX_POSTS_PER_MESSAGE);
   const tweets = await Promise.all(shown.map((id) => fetchTweet(id)));
+  await rehostVideos(tweets, env.VIDEOS, origin);
   for (const [i, tweet] of tweets.entries()) {
     const message = tweet ? buildMessage(tweet) : buildFallback(shown[i]);
     try {
