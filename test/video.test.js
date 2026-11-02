@@ -17,17 +17,26 @@ function fakeBucket() {
     async put(key, body, options) {
       objects.set(key, { bytes: await new Response(body).text(), ...options });
     },
-    // Mirrors R2, which sets `range` even when no Range header was sent.
+    // Mirrors R2: `range` is set even with no Range header, comes back as
+    // {offset}, {offset, length} or {suffix}, and a bad header throws.
     async get(key, options) {
       const stored = objects.get(key);
       if (!stored) return null;
-      const [, start, end] = options?.range?.get?.("range")?.match(/^bytes=(\d+)-(\d+)$/) ?? [];
-      const range = start
-        ? { offset: Number(start), length: end - start + 1 }
-        : { offset: 0, length: stored.bytes.length };
+      const size = stored.bytes.length;
+      const header = options?.range?.get?.("range");
+      const [, start, end] = header?.match(/^bytes=(\d*)-(\d*)$/) ?? [];
+      if (header && (start === undefined || (!start && !end) || start >= size)) {
+        throw new Error("get: The requested range is not satisfiable (10039)");
+      }
+      let range = { offset: 0, length: size };
+      if (start && end) range = { offset: Number(start), length: end - start + 1 };
+      else if (start) range = { offset: Number(start) };
+      else if (end) range = { suffix: Number(end) };
+      const from = range.suffix ? size - range.suffix : range.offset;
+      const to = range.length ? from + range.length : size;
       return {
-        body: range ? stored.bytes.slice(range.offset, range.offset + range.length) : stored.bytes,
-        size: stored.bytes.length,
+        body: stored.bytes.slice(from, to),
+        size,
         range,
         httpEtag: '"etag"',
         writeHttpMetadata(headers) {
@@ -278,3 +287,18 @@ test("serves the requested byte range of a stored video", async () => {
   assert.equal(res.headers.get("content-range"), "bytes 0-2/9");
   assert.equal(await res.text(), "mp4");
 });
+
+for (const [range, contentRange, body] of [
+  ["bytes=4-", "bytes 4-8/9", "bytes"],
+  ["bytes=-5", "bytes 4-8/9", "bytes"],
+]) {
+  test(`answers ${range} with content-range ${contentRange}`, async () => {
+    const request = new Request(`${ORIGIN}/video/99.mp4`, { headers: { range } });
+
+    const res = await serveVideo(request, storedVideo("mp4 bytes"));
+
+    assert.equal(res.status, 206);
+    assert.equal(res.headers.get("content-range"), contentRange);
+    assert.equal(await res.text(), body);
+  });
+}
