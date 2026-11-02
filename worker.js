@@ -20,7 +20,7 @@ const MAX_POSTS_PER_MESSAGE = 5;
 export default {
   async fetch(request, env, ctx) {
     const { origin, pathname } = new URL(request.url);
-    if (request.method === "GET" && pathname.startsWith("/video/")) {
+    if ((request.method === "GET" || request.method === "HEAD") && pathname.startsWith("/video/")) {
       return serveVideo(request, env.VIDEOS);
     }
     if (request.method !== "POST") {

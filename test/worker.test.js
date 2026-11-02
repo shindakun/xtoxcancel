@@ -114,3 +114,11 @@ test("replies to a post link with a play link to the worker's copy", async () =>
   assert.equal(env.VIDEOS.objects.get("99.mp4"), "mp4 bytes");
   assert.match(JSON.stringify(posted[0].blocks), /<https:\/\/bot\.example\.workers\.dev\/video\/99\.mp4\|Play video>/);
 });
+
+test("HEAD /video/<id>.mp4 is answered by the video route", async () => {
+  const env = { VIDEOS: { head: async () => null } };
+
+  const res = await worker.fetch(new Request(`${ORIGIN}/video/99.mp4`, { method: "HEAD" }), env, {});
+
+  assert.equal(res.status, 404);
+});

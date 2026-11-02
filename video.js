@@ -55,7 +55,14 @@ export async function rehostVideos(tweets, bucket, origin, { limit = MAX_VIDEOS_
 
 export async function serveVideo(request, bucket) {
   const key = new URL(request.url).pathname.match(/^\/video\/(\d+\.mp4)$/)?.[1];
-  if (!key || !bucket) return new Response("not found", { status: 404 });
+  if (!key || !bucket) return notFound();
+  if (request.method === "HEAD") {
+    const object = await bucket.head(key);
+    if (!object) return notFound();
+    const headers = videoHeaders(object);
+    headers.set("content-length", String(object.size));
+    return new Response(null, { headers });
+  }
   let ranged = request.headers.has("range");
   let object;
   try {
@@ -65,18 +72,27 @@ export async function serveVideo(request, bucket) {
     ranged = false;
     object = await bucket.get(key);
   }
-  if (!object) return new Response("not found", { status: 404 });
-  // A media id's bytes never change, so the copy can be cached forever.
-  const headers = new Headers({
-    "accept-ranges": "bytes",
-    "cache-control": "public, max-age=31536000, immutable",
-    etag: object.httpEtag,
-  });
-  object.writeHttpMetadata(headers);
+  if (!object) return notFound();
+  const headers = videoHeaders(object);
   if (!ranged) return new Response(object.body, { headers });
   const { offset, length, suffix } = object.range;
   const first = suffix ? object.size - suffix : offset;
   const last = length ? first + length - 1 : object.size - 1;
   headers.set("content-range", `bytes ${first}-${last}/${object.size}`);
   return new Response(object.body, { status: 206, headers });
+}
+
+function notFound() {
+  return new Response("not found", { status: 404 });
+}
+
+// A media id's bytes never change, so the copy can be cached forever.
+function videoHeaders(object) {
+  const headers = new Headers({
+    "accept-ranges": "bytes",
+    "cache-control": "public, max-age=31536000, immutable",
+    etag: object.httpEtag,
+  });
+  object.writeHttpMetadata(headers);
+  return headers;
 }

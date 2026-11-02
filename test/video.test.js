@@ -12,7 +12,15 @@ function fakeBucket() {
   return {
     objects,
     async head(key) {
-      return objects.has(key) ? { key } : null;
+      const stored = objects.get(key);
+      if (!stored) return null;
+      return {
+        size: stored.bytes.length,
+        httpEtag: '"etag"',
+        writeHttpMetadata(headers) {
+          headers.set("content-type", stored.httpMetadata.contentType);
+        },
+      };
     },
     async put(key, body, options) {
       objects.set(key, { bytes: await new Response(body).text(), ...options });
@@ -310,4 +318,16 @@ test("sends the whole video when R2 cannot satisfy the requested range", async (
 
   assert.equal(res.status, 200);
   assert.equal(await res.text(), "mp4 bytes");
+});
+
+test("answers HEAD with the video's headers and no body", async () => {
+  const request = new Request(`${ORIGIN}/video/99.mp4`, { method: "HEAD" });
+
+  const res = await serveVideo(request, storedVideo("mp4 bytes"));
+
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get("content-type"), "video/mp4");
+  assert.equal(res.headers.get("content-length"), "9");
+  assert.equal(res.headers.get("accept-ranges"), "bytes");
+  assert.equal(res.body, null);
 });
