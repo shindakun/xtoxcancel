@@ -10,7 +10,7 @@ import {
   extractStatusIds,
   fetchTweet,
 } from "./tweet.js";
-import { rehostVideos, serveVideo } from "./video.js";
+import { pruneVideos, rehostVideos, serveVideo } from "./video.js";
 
 // Each post costs up to four subrequests (two APIs, the post, a plain text
 // retry), and the Workers free plan allows 50 per invocation. Video copies
@@ -79,51 +79,61 @@ export default {
     return new Response("ok", { status: 200 });
   },
 
-  // Daily sweep (cron in wrangler.toml): join any public channels the bot
-  // isn't in yet, so new channels get covered automatically.
-  // Requires scopes: channels:read, channels:join
+  // Daily sweep (cron in wrangler.toml): trim the video copies to fit the
+  // storage budget, then join any public channels the bot isn't in yet.
   async scheduled(event, env, ctx) {
-    let cursor;
-    do {
-      const url = new URL("https://slack.com/api/conversations.list");
-      url.searchParams.set("types", "public_channel");
-      url.searchParams.set("exclude_archived", "true");
-      url.searchParams.set("limit", "200");
-      if (cursor) url.searchParams.set("cursor", cursor);
-
-      const res = await fetch(url, {
-        headers: { authorization: `Bearer ${env.SLACK_BOT_TOKEN}` },
-      });
-      const data = await res.json();
-      if (!data.ok) {
-        console.error("conversations.list failed:", data.error);
-        return;
-      }
-
-      for (const ch of data.channels || []) {
-        if (!ch.is_member) {
-          const joinRes = await fetch(
-            "https://slack.com/api/conversations.join",
-            {
-              method: "POST",
-              headers: {
-                "content-type": "application/json; charset=utf-8",
-                authorization: `Bearer ${env.SLACK_BOT_TOKEN}`,
-              },
-              body: JSON.stringify({ channel: ch.id }),
-            }
-          );
-          const joinData = await joinRes.json();
-          if (!joinData.ok) {
-            console.error(`join failed for ${ch.name}:`, joinData.error);
-          }
-        }
-      }
-
-      cursor = data.response_metadata?.next_cursor;
-    } while (cursor);
+    await pruneVideos(env.VIDEOS).catch((err) =>
+      console.error("pruning videos failed:", err.message)
+    );
+    await joinPublicChannels(env).catch((err) =>
+      console.error("joining channels failed:", err.message)
+    );
   },
 };
+
+// Joins public channels so new ones get covered automatically.
+// Requires scopes: channels:read, channels:join
+async function joinPublicChannels(env) {
+  let cursor;
+  do {
+    const url = new URL("https://slack.com/api/conversations.list");
+    url.searchParams.set("types", "public_channel");
+    url.searchParams.set("exclude_archived", "true");
+    url.searchParams.set("limit", "200");
+    if (cursor) url.searchParams.set("cursor", cursor);
+
+    const res = await fetch(url, {
+      headers: { authorization: `Bearer ${env.SLACK_BOT_TOKEN}` },
+    });
+    const data = await res.json();
+    if (!data.ok) {
+      console.error("conversations.list failed:", data.error);
+      return;
+    }
+
+    for (const ch of data.channels || []) {
+      if (!ch.is_member) {
+        const joinRes = await fetch(
+          "https://slack.com/api/conversations.join",
+          {
+            method: "POST",
+            headers: {
+              "content-type": "application/json; charset=utf-8",
+              authorization: `Bearer ${env.SLACK_BOT_TOKEN}`,
+            },
+            body: JSON.stringify({ channel: ch.id }),
+          }
+        );
+        const joinData = await joinRes.json();
+        if (!joinData.ok) {
+          console.error(`join failed for ${ch.name}:`, joinData.error);
+        }
+      }
+    }
+
+    cursor = data.response_metadata?.next_cursor;
+  } while (cursor);
+}
 
 async function verifySlackSignature(secret, timestamp, body, signature) {
   const base = `v0:${timestamp}:${body}`;

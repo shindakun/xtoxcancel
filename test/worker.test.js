@@ -122,3 +122,39 @@ test("HEAD /video/<id>.mp4 is answered by the video route", async () => {
 
   assert.equal(res.status, 404);
 });
+
+test("the daily cron prunes video copies even when the Slack sweep throws", async () => {
+  mock.method(globalThis, "fetch", async () => new Response("<html>bad gateway</html>"));
+  mock.method(console, "error", () => {});
+  const deleted = [];
+  const VIDEOS = {
+    list: async () => ({
+      objects: [{ key: "1.mp4", size: 10 * 1024 ** 3, uploaded: new Date() }],
+      truncated: false,
+    }),
+    delete: async (keys) => deleted.push(...keys),
+  };
+
+  await worker.scheduled({}, { SLACK_BOT_TOKEN: "xoxb", VIDEOS }, {});
+
+  assert.deepEqual(deleted, ["1.mp4"]);
+});
+
+test("the daily cron skips pruning when no bucket is bound", async () => {
+  mock.method(globalThis, "fetch", async () => Response.json({ ok: true, channels: [] }));
+  const errors = mock.method(console, "error", () => {});
+
+  await worker.scheduled({}, { SLACK_BOT_TOKEN: "xoxb" }, {});
+
+  assert.equal(errors.mock.callCount(), 0);
+});
+
+test("the daily cron still joins channels when pruning fails", async () => {
+  const slack = mock.method(globalThis, "fetch", async () => Response.json({ ok: true, channels: [] }));
+  mock.method(console, "error", () => {});
+  const VIDEOS = { list: async () => { throw new Error("R2 down"); } };
+
+  await worker.scheduled({}, { SLACK_BOT_TOKEN: "xoxb", VIDEOS }, {});
+
+  assert.equal(slack.mock.callCount(), 1);
+});
