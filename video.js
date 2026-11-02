@@ -35,16 +35,19 @@ const MAX_VIDEOS_PER_MESSAGE = 8;
 
 export async function rehostVideos(tweets, bucket, origin, { limit = MAX_VIDEOS_PER_MESSAGE } = {}) {
   if (!bucket) return;
-  const videos = tweets
-    .filter(Boolean)
-    .flatMap((t) => [...t.videos, ...(t.quote?.videos || [])])
-    .filter((v) => /^\d+$/.test(v.id))
-    .slice(0, limit);
+  const byId = Map.groupBy(
+    tweets
+      .filter(Boolean)
+      .flatMap((t) => [...t.videos, ...(t.quote?.videos || [])])
+      .filter((v) => /^\d+$/.test(v.id)),
+    (v) => v.id
+  );
   await Promise.all(
-    videos.map(async (v) => {
+    [...byId.values()].slice(0, limit).map(async (copies) => {
+      const [v] = copies;
       try {
         const hosted = await rehostVideo(bucket, v, origin);
-        if (hosted) v.url = hosted;
+        if (hosted) for (const c of copies) c.url = hosted;
         else console.error(`could not copy video ${v.id}`);
       } catch (err) {
         console.error(`copying video ${v.id} failed:`, err.message);

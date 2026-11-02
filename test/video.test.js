@@ -331,3 +331,15 @@ test("answers HEAD with the video's headers and no body", async () => {
   assert.equal(res.headers.get("accept-ranges"), "bytes");
   assert.equal(res.body, null);
 });
+
+test("rehostVideos copies a video shared by two posts once", async () => {
+  const bucket = fakeBucket();
+  const fetchMock = twimgServes("mp4 bytes");
+  const post = postWithVideos("1");
+  post.quote = postWithVideos("1");
+
+  await rehostVideos([post, postWithVideos("1")], bucket, ORIGIN);
+
+  assert.equal(fetchMock.mock.callCount(), 1);
+  assert.equal(post.quote.videos[0].url, `${ORIGIN}/video/1.mp4`);
+});
