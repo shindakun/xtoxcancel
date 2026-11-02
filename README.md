@@ -15,8 +15,10 @@ It runs as a single Cloudflare Worker.
   answers the URL verification handshake, and for regular user messages pulls
   out the status ID from any x.com/twitter.com post link. The replies go out
   via `ctx.waitUntil` so Slack gets its 200 right away.
-- **scheduled**: runs daily at 09:00 UTC and joins any public channel the bot
-  isn't in yet. That way you don't have to invite it to new channels by hand.
+- **scheduled**: runs daily at 09:00 UTC. It trims the video copies to fit
+  the storage budget (see [Videos](#videos)), then joins any public channel
+  the bot isn't in yet, so you don't have to invite it to new channels by
+  hand.
 
 `tweet.js` fetches each post and builds the reply:
 
@@ -58,10 +60,12 @@ secret is on the Basic Information page.
 
 ### 2. Deploy the worker
 
-Create the R2 bucket for video copies once, then deploy:
+Create the R2 bucket for video copies once, with a rule that expires copies
+after 90 days, then deploy:
 
 ```sh
 npx wrangler r2 bucket create xtoxcancel-videos
+npx wrangler r2 bucket lifecycle add xtoxcancel-videos expire-90-days --expire-days 90 --force
 npx wrangler deploy
 ```
 
@@ -96,9 +100,13 @@ on iOS too, and sends long cache headers since a media id never changes.
   over the cap, or the download fails) keeps its video.twimg.com link, so
   the reply still goes out.
 - Without the `VIDEOS` binding the bot links straight to X as before.
-- Copies are kept until you delete them. R2's free tier covers 10 GB; if
-  you want old ones cleaned up, add an object lifecycle rule to the bucket:
-  `npx wrangler r2 bucket lifecycle add xtoxcancel-videos`.
+- Two things keep the bucket inside R2's 10 GB free tier. The daily cron
+  adds up the bucket and deletes the oldest copies until it's under 8 GB
+  (`STORAGE_BUDGET_BYTES` in `video.js`), which leaves room for a day of new
+  copies, and the bucket's lifecycle rule deletes any copy older than 90
+  days. A copy over 30 days old is re-saved when it's linked again, so a new
+  link doesn't point at a copy that's about to expire. A deleted copy's play
+  link in an old thread stops working.
 
 ## Local development
 
