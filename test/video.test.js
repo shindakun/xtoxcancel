@@ -116,3 +116,16 @@ test("rehosting returns null when the source answers with an error", async () =>
   assert.equal(url, null);
   assert.equal(bucket.objects.size, 0);
 });
+
+test("rehosting gives up on a source that takes too long", async () => {
+  const bucket = fakeBucket();
+  mock.method(globalThis, "fetch", (url, init) =>
+    new Promise((_, reject) =>
+      init?.signal?.addEventListener("abort", () => reject(init.signal.reason))
+    )
+  );
+
+  await assert.rejects(rehostVideo(bucket, VIDEO, ORIGIN, { timeoutMs: 10 }), {
+    name: "TimeoutError",
+  });
+});
