@@ -51,3 +51,20 @@ export async function rehostVideos(tweets, bucket, origin, { limit = MAX_VIDEOS_
     })
   );
 }
+
+export async function serveVideo(request, bucket) {
+  const key = new URL(request.url).pathname.match(/^\/video\/(\d+\.mp4)$/)?.[1];
+  const object = key && (await bucket.get(key, { range: request.headers }));
+  if (!object) return new Response("not found", { status: 404 });
+  // A media id's bytes never change, so the copy can be cached forever.
+  const headers = new Headers({
+    "accept-ranges": "bytes",
+    "cache-control": "public, max-age=31536000, immutable",
+    etag: object.httpEtag,
+  });
+  object.writeHttpMetadata(headers);
+  if (!object.range) return new Response(object.body, { headers });
+  const { offset, length } = object.range;
+  headers.set("content-range", `bytes ${offset}-${offset + length - 1}/${object.size}`);
+  return new Response(object.body, { status: 206, headers });
+}

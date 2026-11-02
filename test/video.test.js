@@ -1,6 +1,6 @@
 import { test, afterEach, mock } from "node:test";
 import assert from "node:assert/strict";
-import { pickVariant, rehostVideo, rehostVideos } from "../video.js";
+import { pickVariant, rehostVideo, rehostVideos, serveVideo } from "../video.js";
 
 const MB = 1024 * 1024;
 const ORIGIN = "https://bot.example.workers.dev";
@@ -17,7 +17,29 @@ function fakeBucket() {
     async put(key, body, options) {
       objects.set(key, { bytes: await new Response(body).text(), ...options });
     },
+    // Mirrors R2: a Range header in `range` returns that slice and sets `range`.
+    async get(key, options) {
+      const stored = objects.get(key);
+      if (!stored) return null;
+      const [, start, end] = options?.range?.get?.("range")?.match(/^bytes=(\d+)-(\d+)$/) ?? [];
+      const range = start && { offset: Number(start), length: end - start + 1 };
+      return {
+        body: range ? stored.bytes.slice(range.offset, range.offset + range.length) : stored.bytes,
+        size: stored.bytes.length,
+        range,
+        httpEtag: '"etag"',
+        writeHttpMetadata(headers) {
+          headers.set("content-type", stored.httpMetadata.contentType);
+        },
+      };
+    },
   };
+}
+
+function storedVideo(bytes) {
+  const bucket = fakeBucket();
+  bucket.objects.set("99.mp4", { bytes, httpMetadata: { contentType: "video/mp4" } });
+  return bucket;
 }
 
 function twimgServes(bytes) {
@@ -213,4 +235,44 @@ test("rehostVideos leaves videos on X when no bucket is bound", async () => {
   assert.equal(post.videos[0].url, "https://video.twimg.com/1.mp4");
   assert.equal(fetchMock.mock.callCount(), 0);
   assert.equal(errors.mock.callCount(), 0);
+});
+
+test("serves a stored video", async () => {
+  const bucket = storedVideo("mp4 bytes");
+
+  const res = await serveVideo(new Request(`${ORIGIN}/video/99.mp4`), bucket);
+
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get("content-type"), "video/mp4");
+  assert.equal(res.headers.get("accept-ranges"), "bytes");
+  assert.equal(res.headers.get("etag"), '"etag"');
+  assert.equal(res.headers.get("cache-control"), "public, max-age=31536000, immutable");
+  assert.equal(await res.text(), "mp4 bytes");
+});
+
+test("answers 404 for a video that is not stored", async () => {
+  const res = await serveVideo(new Request(`${ORIGIN}/video/12.mp4`), storedVideo("mp4"));
+
+  assert.equal(res.status, 404);
+});
+
+test("answers 404 without reading R2 for a path that is not a video key", async () => {
+  const bucket = storedVideo("mp4");
+  const get = mock.method(bucket, "get");
+
+  const res = await serveVideo(new Request(`${ORIGIN}/video/99.mp4/../secret`), bucket);
+
+  assert.equal(res.status, 404);
+  assert.equal(get.mock.callCount(), 0);
+});
+
+test("serves the requested byte range of a stored video", async () => {
+  const bucket = storedVideo("mp4 bytes");
+  const request = new Request(`${ORIGIN}/video/99.mp4`, { headers: { range: "bytes=0-2" } });
+
+  const res = await serveVideo(request, bucket);
+
+  assert.equal(res.status, 206);
+  assert.equal(res.headers.get("content-range"), "bytes 0-2/9");
+  assert.equal(await res.text(), "mp4");
 });
