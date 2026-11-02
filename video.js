@@ -11,6 +11,11 @@ const MAX_VIDEO_BYTES = 50 * 1024 * 1024;
 // Replies wait on the copy, and waitUntil stops 30 s after Slack's ack.
 const VIDEO_TIMEOUT_MS = 15000;
 
+// Cleanup goes by upload time, so a copy that's linked again gets re-saved
+// rather than expiring under a link posted today.
+const REFRESH_AFTER_MS = 30 * 24 * 3600 * 1000;
+const VIDEO_METADATA = { httpMetadata: { contentType: "video/mp4" } };
+
 export async function rehostVideo(
   bucket,
   video,
@@ -18,7 +23,10 @@ export async function rehostVideo(
   { maxBytes = MAX_VIDEO_BYTES, timeoutMs = VIDEO_TIMEOUT_MS } = {}
 ) {
   const key = `${video.id}.mp4`;
-  if (!(await bucket.head(key))) {
+  const stored = await bucket.head(key);
+  if (stored) {
+    if (Date.now() - stored.uploaded > REFRESH_AFTER_MS) await resave(bucket, key);
+  } else {
     const res = await fetch(pickVariant(video, maxBytes), {
       signal: AbortSignal.timeout(timeoutMs),
     });
@@ -27,9 +35,14 @@ export async function rehostVideo(
       await res.body?.cancel();
       return null;
     }
-    await bucket.put(key, res.body, { httpMetadata: { contentType: "video/mp4" } });
+    await bucket.put(key, res.body, VIDEO_METADATA);
   }
   return `${origin}/video/${key}`;
+}
+
+async function resave(bucket, key) {
+  const object = await bucket.get(key);
+  await bucket.put(key, object.body, VIDEO_METADATA);
 }
 
 // A copy costs three subrequests (R2 head, the download, R2 put). Five posts
@@ -101,4 +114,36 @@ function videoHeaders(object) {
   });
   object.writeHttpMetadata(headers);
   return headers;
+}
+
+// R2's free tier is 10 GB (decimal). Pruning runs once a day, so this leaves
+// 2 GB for a day of new copies, about 40 at the 50 MB cap.
+const STORAGE_BUDGET_BYTES = 8e9;
+
+// Deletes the oldest copies until the bucket fits in the budget.
+export async function pruneVideos(bucket, { budgetBytes = STORAGE_BUDGET_BYTES } = {}) {
+  if (!bucket) return;
+  const objects = await listAll(bucket);
+  let total = objects.reduce((sum, o) => sum + o.size, 0);
+  const doomed = [];
+  for (const o of objects.sort((a, b) => a.uploaded - b.uploaded)) {
+    if (total <= budgetBytes) break;
+    doomed.push(o.key);
+    total -= o.size;
+  }
+  // R2 deletes at most 1000 keys per call.
+  for (let i = 0; i < doomed.length; i += 1000) {
+    await bucket.delete(doomed.slice(i, i + 1000));
+  }
+}
+
+async function listAll(bucket) {
+  const objects = [];
+  let cursor;
+  do {
+    const page = await bucket.list({ cursor });
+    objects.push(...page.objects);
+    cursor = page.truncated ? page.cursor : undefined;
+  } while (cursor);
+  return objects;
 }

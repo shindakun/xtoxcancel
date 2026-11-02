@@ -9,7 +9,9 @@ compatibility_date = "2026-08-01"
 binding = "VIDEOS"
 bucket_name = "xtoxcancel-videos"
 
-# Daily 9:00 UTC sweep to auto-join new public channels
+# Daily 9:00 UTC sweep: trims the video copies to the storage budget, then
+# auto-joins new public channels. Don't remove it, or the bucket stops being
+# pruned.
 [triggers]
 crons = ["0 9 * * *"]
 
